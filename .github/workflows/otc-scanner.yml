@@ -1,0 +1,142 @@
+name: otc-scanner
+
+# Two jobs for examples/pocket_option_otc_scanner:
+#   test - lint + unit tests (incl. the Playwright browser-tap test) on every change
+#   scan - run the scanner itself for a fixed time; started by hand from the Actions tab
+#          (or on a schedule, if you uncomment it below)
+
+on:
+  push:
+    paths:
+      - "examples/pocket_option_otc_scanner/**"
+      - ".github/workflows/otc-scanner.yml"
+  pull_request:
+    paths:
+      - "examples/pocket_option_otc_scanner/**"
+      - ".github/workflows/otc-scanner.yml"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long to scan (minutes, max 340: GitHub stops jobs at 6h)"
+        default: "60"
+        required: true
+      feed:
+        description: "websocket = live Pocket Option (needs the PO_SSID secret); simulated = offline pipeline check"
+        type: choice
+        options: [websocket, simulated]
+        default: websocket
+      pairs:
+        description: 'Pairs: "auto" or a comma list like EURUSD_otc,GBPUSD_otc'
+        default: auto
+      timeframe:
+        description: "Candle size in seconds"
+        default: "60"
+      config:
+        description: "Optional config file, relative to examples/pocket_option_otc_scanner (e.g. config.ci.yaml)"
+        default: ""
+  # Scheduled scans. Each run uses Actions minutes and your Pocket Option session;
+  # uncomment deliberately. Cron is UTC. This starts a 5h40m scan every 6 hours.
+  # schedule:
+  #   - cron: "0 */6 * * *"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: examples/pocket_option_otc_scanner
+
+jobs:
+  test:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: examples/pocket_option_otc_scanner/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt ruff
+          python -m playwright install --with-deps chromium
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Tests
+        run: python -m pytest tests -q -rs
+
+  scan:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    # Hard ceiling (GitHub's max). The scan length itself is enforced by `timeout` below,
+    # leaving headroom for setup, the summary and the artifact upload.
+    timeout-minutes: 360
+    concurrency:
+      group: otc-scanner-scan
+      cancel-in-progress: false
+    env:
+      MINUTES: ${{ inputs.minutes || '340' }}
+      FEED: ${{ inputs.feed || 'websocket' }}
+      PAIRS: ${{ inputs.pairs || 'auto' }}
+      TIMEFRAME: ${{ inputs.timeframe || '60' }}
+      CONFIG: ${{ inputs.config || '' }}
+      PO_SSID: ${{ secrets.PO_SSID }}
+      PYTHONUNBUFFERED: "1"
+      COLUMNS: "220" # wide console lines in the log instead of 80-column wrapping
+      FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: examples/pocket_option_otc_scanner/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check inputs and secret
+        run: |
+          if ! [[ "$MINUTES" =~ ^[0-9]+$ ]] || (( MINUTES < 1 || MINUTES > 340 )); then
+            echo "::error::minutes must be a whole number from 1 to 340"; exit 1
+          fi
+          if [[ "$FEED" == websocket && -z "$PO_SSID" ]]; then
+            echo "::error::The PO_SSID repository secret is not set. Add it under Settings → Secrets and variables → Actions (see the scanner README, section 'Running on GitHub Actions')."
+            exit 1
+          fi
+          if [[ -n "$CONFIG" && ! -f "$CONFIG" ]]; then
+            echo "::error::config file '$CONFIG' not found in examples/pocket_option_otc_scanner"; exit 1
+          fi
+
+      - name: Scan for ${{ env.MINUTES }} minutes
+        run: |
+          args=(--feed "$FEED" --pairs "$PAIRS" --timeframe "$TIMEFRAME" --jsonl signals.jsonl)
+          [[ -n "$CONFIG" ]] && args+=(--config "$CONFIG")
+          # SIGINT at the deadline = the scanner's normal Ctrl+C shutdown (exit 0).
+          # An auth rejection or bad config still exits non-zero and fails the job.
+          timeout --preserve-status --signal=INT "${MINUTES}m" python -m otc_scanner "${args[@]}"
+
+      - name: Job summary
+        if: always()
+        run: python -m otc_scanner.summary signals.jsonl >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload signals
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signals-${{ github.run_id }}
+          path: examples/pocket_option_otc_scanner/signals.jsonl
+          if-no-files-found: ignore
+          retention-days: 14

@@ -54,3 +54,23 @@ def test_history_seed_makes_pair_warm_immediately():
     hist = [Tick("EURUSD_otc", 60 * i, 1 + (i % 7) / 1000) for i in range(100)]
     scanner.handle(FeedEvent("history", ticks=hist, asset="EURUSD_otc"))
     assert len(scanner.candles.candles("EURUSD_otc")) >= scanner.indicators.min_bars
+
+
+def test_summary_markdown(tmp_path):
+    from otc_scanner.summary import render
+
+    assert "No signals" in render(tmp_path / "missing.jsonl")
+    p = tmp_path / "s.jsonl"
+    rec = {
+        "asset": "EURUSD_otc",
+        "direction": "PUT",
+        "rule": "rsi_extremes",
+        "condition": "RSI(14)=73.87 > 70 (overbought)",
+        "price": 1.12587,
+        "time_utc": "2026-09-23T20:09:00+00:00",
+    }
+    p.write_text(json.dumps(rec) + "\n" + json.dumps(rec) + "\n")
+    md = render(p, limit=1)
+    assert "**2 signal(s)** across 1 pair(s): EURUSD_otc (2)" in md
+    assert "| 2026-09-23 20:09:00 | EURUSD_otc | PUT | rsi_extremes |" in md
+    assert "last 1" in md

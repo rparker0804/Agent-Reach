@@ -116,7 +116,45 @@ python -m otc_scanner -v                                      # debug logging (u
 
 **Warm-up.** The default indicator set needs 44 closed candles (MACD 26 + 2×9) before any rule is evaluated. Pocket Option usually sends recent history after a pair is subscribed, and the scanner back-fills from it when it does (logged as `back-filled N candles`). If it doesn't, expect ~45 minutes of warm-up on 1-minute candles. The periodic **Feed status** table shows the ticks/min and warm-up progress for each pair.
 
-## 6. Changing indicators and signal conditions
+## 6. Running on GitHub Actions
+
+`.github/workflows/otc-scanner.yml` (at the repo root) has two jobs:
+
+- **test** runs on every push or PR that touches this folder. It runs ruff and the full test suite, including the Playwright browser test with a real Chromium.
+- **scan** runs the scanner itself for a fixed time, then posts the flagged signals as the run's **job summary** (a table) and uploads `signals.jsonl` as an artifact (kept 14 days). You start it from the Actions tab, or on a schedule if you enable one.
+
+### One-time setup
+
+1. Copy your auth frame as in [section 4](#option-b-direct-websocket-feedtype-websocket). A **demo** session is strongly recommended.
+2. In the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**. Name it `PO_SSID` and paste the whole `42["auth",…]` frame as the value.
+3. The workflow file has to be on the repo's **default branch** before the "Run workflow" button appears.
+4. **If the repo is a fork**, GitHub disables Actions on it by default. Open the **Actions** tab and click *"I understand my workflows, go ahead and enable them"*. Scheduled workflows on forks also stay off until enabled there.
+
+### Running a scan
+
+**Actions → otc-scanner → Run workflow**, then fill in:
+
+| Input | Meaning |
+|---|---|
+| `minutes` | How long to scan (1–340; GitHub kills any job at 6 h) |
+| `feed` | `websocket` (live; needs the secret) or `simulated` (no account; checks the pipeline end to end, with fast simulated time so it fires a lot) |
+| `pairs` | `auto` or `EURUSD_otc,GBPUSD_otc,…` |
+| `timeframe` | Candle size in seconds |
+| `config` | Optional YAML in this folder, e.g. a committed `config.ci.yaml` with your own indicators and rules. Don't use `config.yaml`, which is git-ignored. |
+
+- Signals appear live in the step log **Scan for N minutes**, as well as in the summary and the artifact.
+- At the deadline the scanner gets a Ctrl+C and exits cleanly. A rejected session (`NotAuthorized`) or a bad config fails the job instead, so an expired `PO_SSID` shows up as a red run. Update the secret to fix it.
+- **Scheduled scans:** uncomment the `schedule:` block in the workflow. The example starts a 5 h 40 min scan every 6 hours, which leaves a small gap between runs. Only one scan runs at a time (`concurrency`).
+
+### Limits and risks specific to GitHub
+
+- **Not a 24/7 service.** Each run is capped at 6 hours, scheduled starts can be delayed by several minutes when GitHub is busy, and every run begins with a fresh warm-up (§5). For continuous scanning, run it on an always-on machine or VPS instead.
+- **Datacenter IPs.** Runners connect from Microsoft Azure address ranges. Pocket Option or Cloudflare may block or challenge these more readily than a home connection, so the first live run tells you whether it works. Only `websocket` and `simulated` work on Actions; the browser feed needs a manual first login.
+- **Your session runs on GitHub's servers.** The secret is masked in logs and is never passed to workflows triggered by pull requests from forks. Still, anyone with write access to the repo can create a workflow that reads it, so use a demo session. Using the same session in your browser and on Actions at once may log one of them out (unverified).
+- **Public repos have public logs.** In a public repository, anyone can read the run logs, summaries and artifacts, which means your signals and the pairs you watch.
+- **Actions minutes.** Free for public repos. For private repos, runs count against your plan's monthly minutes, and a 6-hourly schedule uses about 1,400 min/week.
+
+## 7. Changing indicators and signal conditions
 
 Everything is in `config.yaml`; no code changes are needed for the built-ins.
 
@@ -167,7 +205,7 @@ class ATR(Indicator):
 
 **New data source** (another broker, CSV replay): subclass `feeds.base.PriceFeed` and yield `FeedEvent`s.
 
-## 7. ⚠ Parts that depend on Pocket Option's current front-end/API
+## 8. ⚠ Parts that depend on Pocket Option's current front-end/API
 
 These are the places that **will break** when the platform changes. They're kept together so a fix is local. Each is marked `FRAGILE` in the source.
 
@@ -192,7 +230,7 @@ These are the places that **will break** when the platform changes. They're kept
 
 **Demo vs real quotes.** Demo and real OTC feeds are generally reported to match, but that isn't guaranteed. If you trade on real, check a few prices side by side.
 
-## 8. Tests
+## 9. Tests
 
 ```bash
 cd examples/pocket_option_otc_scanner
