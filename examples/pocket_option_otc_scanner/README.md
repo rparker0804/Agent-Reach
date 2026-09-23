@@ -190,12 +190,22 @@ signals:
 @register("atr")
 class ATR(Indicator):
     def __init__(self, id, period=14):
-        super().__init__(id, period=period); self.period = period
+        super().__init__(id, period=period)
+        self.period = period
+
     @property
-    def min_bars(self): return self.period + 1
+    def min_bars(self):
+        return self.period + 1
+
     def compute(self, df):
-        tr = pd.concat([df.high - df.low, (df.high - df.close.shift()).abs(),
-                        (df.low - df.close.shift()).abs()], axis=1).max(axis=1)
+        tr = pd.concat(
+            [
+                df.high - df.low,
+                (df.high - df.close.shift()).abs(),
+                (df.low - df.close.shift()).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
         return {"": tr.ewm(alpha=1 / self.period, adjust=False).mean()}
 ```
 
