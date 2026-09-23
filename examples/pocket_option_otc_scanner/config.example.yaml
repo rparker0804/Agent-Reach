@@ -1,0 +1,89 @@
+# Pocket Option OTC scanner configuration.
+# Copy to config.yaml and edit. Every key is optional; omitted keys use these defaults.
+
+feed:
+  # websocket : connect straight to the quote server with your browser session (PO_SSID)
+  # browser   : drive a real Chromium window with Playwright and tap its socket
+  # simulated : offline random walk, for trying indicators/rules without an account
+  type: websocket
+
+  websocket:
+    auth_env: PO_SSID          # env var holding the 42["auth",{...}] frame (see README)
+    regions: [DEMO]            # DEMO for demo accounts; e.g. [EUROPA, SEYCHELLES] for real
+    user_agent: null           # optional: set to your browser's UA string
+    subscribe_interval: 0.3    # seconds between per-pair subscribe frames
+    idle_timeout: 60           # reconnect if no frame arrives for this long
+
+  browser:
+    account: demo              # demo | real | or a full terminal URL
+    profile_dir: ~/.otc_scanner/browser-profile
+    headless: false            # must be false for the first (manual) login
+    inject_subscriptions: true # false = only read pairs you open on screen yourself
+    executable_path: null      # optional: use an installed Chrome/Chromium binary
+    subscribe_interval: 0.3
+
+  simulated:
+    ticks_per_second: 20       # 20 ticks/s at speed 300 -> 4 ticks per 1m candle
+    speed: 300                 # time compression; 300 -> five 1-minute candles per second
+    seed: null
+
+  # FRAGILE: frames sent to start streaming a pair. {asset}/{period} are substituted.
+  # Change here (not in code) if Pocket Option renames the subscription event.
+  subscribe_templates:
+    - ["changeSymbol", {"asset": "{asset}", "period": "{period}"}]
+
+scanner:
+  timeframe: 60                # candle size in seconds
+  pairs: auto                  # "auto" (every OTC pair advertised) or a list: [EURUSD_otc, GBPUSD_otc]
+  currency_pairs_only: true    # with auto: skip OTC stocks/commodities/crypto
+  min_payout: null             # with auto: e.g. 85 to skip low-payout pairs
+  max_pairs: 20
+  fallback_pairs: [EURUSD_otc, GBPUSD_otc, USDJPY_otc, AUDCAD_otc, EURJPY_otc, GBPJPY_otc]
+  max_candles: 500             # rolling window kept per pair
+  status_interval: 60          # seconds between feed-status tables (0 = off)
+
+# Indicators: `id` is how rules refer to the output. Multi-output indicators expose
+# `<id>.<output>` columns: macd.macd / macd.signal / macd.hist, bb.upper / bb.middle /
+# bb.lower, stoch.k / stoch.d. Built-in types: sma, ema, rsi, macd, bollinger, stochastic.
+indicators:
+  - {id: rsi, type: rsi, period: 14}
+  - {id: ema_fast, type: ema, period: 9}
+  - {id: ema_slow, type: ema, period: 21}
+  - {id: macd, type: macd, fast: 12, slow: 26, signal: 9}
+  - {id: bb, type: bollinger, period: 20, stddev: 2}
+
+signals:
+  cooldown_bars: 3             # min bars between two signals of the same rule on the same pair
+  rules:
+    - id: rsi_extremes
+      type: threshold
+      column: rsi
+      below: 30                # oversold  -> CALL
+      above: 70                # overbought -> PUT
+
+    - id: ema_cross
+      type: crossover
+      fast: ema_fast
+      slow: ema_slow           # fast crosses up -> CALL, down -> PUT
+
+    - id: macd_cross
+      type: crossover
+      fast: macd.macd
+      slow: macd.signal
+
+    - id: bb_rsi_oversold      # confluence: both conditions on the same bar
+      type: all_of
+      rules:
+        - {type: threshold, column: rsi, below: 30}
+        - {type: crossover, fast: close, slow: bb.lower, up: null, down: CALL}
+
+    - id: bb_rsi_overbought
+      type: all_of
+      rules:
+        - {type: threshold, column: rsi, above: 70}
+        - {type: crossover, fast: close, slow: bb.upper, up: PUT, down: null}
+
+output:
+  console: true
+  show_status: true
+  jsonl: null                  # e.g. signals.jsonl to also log signals as JSON lines

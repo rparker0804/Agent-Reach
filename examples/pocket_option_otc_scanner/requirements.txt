@@ -1,0 +1,15 @@
+# Core (indicators, signals, config, output)
+pandas>=2.0
+numpy>=1.24
+PyYAML>=6.0
+loguru>=0.7
+rich>=13.0
+
+# feed.type = websocket
+websockets>=13.0
+
+# feed.type = browser  (then run: python -m playwright install chromium)
+playwright>=1.48
+
+# tests
+pytest>=8.0
