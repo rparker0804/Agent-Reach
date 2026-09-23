@@ -179,3 +179,63 @@ def test_browser_feed_taps_page_socket_and_injects_subscriptions(tmp_path):
     assert rx["auth"] == AUTH  # sent by the page, not by us
     assert rx["subs"][0] == '42["changeSymbol",{"asset":"EURUSD_otc","period":60}]'  # injected
     assert [e.kind for e in events] == ["assets", "ticks"]
+
+
+def test_get_ssid_captures_page_auth_frame(tmp_path):
+    pytest.importorskip("playwright")
+    import http.server
+    import re
+    import threading
+
+    from otc_scanner.get_ssid import capture_auth_frame
+    from websockets.asyncio.server import serve
+
+    received = []
+
+    async def main():
+        async with serve(lambda ws: mock_server(ws, received), "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            page_js = f"""
+              const ws = new WebSocket("ws://127.0.0.1:{port}/socket.io/?EIO=4&transport=websocket");
+              ws.onmessage = (e) => {{
+                if (typeof e.data !== "string") return;
+                if (e.data.startsWith("0{{")) ws.send("40");
+                else if (e.data.startsWith("40")) ws.send({json.dumps(AUTH)});
+              }};
+            """
+            (tmp_path / "index.html").write_text(f"<html><script>{page_js}</script></html>")
+            handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(  # noqa: E731
+                *a, directory=str(tmp_path), **k
+            )
+            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            try:
+                return await capture_auth_frame(
+                    f"http://127.0.0.1:{httpd.server_address[1]}/index.html",
+                    tmp_path / "profile",
+                    headless=True,
+                    timeout=20,
+                    socket_pattern=re.compile(r"127\.0\.0\.1:\d+/socket\.io"),
+                    executable_path=os.environ.get("OTC_SCANNER_CHROMIUM"),
+                )
+            finally:
+                httpd.shutdown()
+
+    try:
+        frame = asyncio.run(asyncio.wait_for(main(), 30))
+    except Exception as exc:
+        if "Executable doesn't exist" in str(exc):
+            pytest.skip("Chromium not installed (python -m playwright install chromium)")
+        raise
+    assert frame == AUTH
+    assert dict(received)["auth"] == AUTH  # still forwarded, the page keeps working
+
+
+def test_get_ssid_save_and_describe(tmp_path):
+    from otc_scanner.get_ssid import describe, save_frame
+
+    p = save_frame(AUTH, tmp_path / "sub" / "po_ssid")
+    assert p.read_text() == AUTH
+    assert (p.stat().st_mode & 0o777) == 0o600
+    assert describe(AUTH) == "DEMO account, uid 1"
+    assert "test" not in describe(AUTH)  # never echoes the session value

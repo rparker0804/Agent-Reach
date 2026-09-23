@@ -74,6 +74,17 @@ python -m otc_scanner --feed simulated
 
 The scanner reuses the session your browser already has. It never sees your password.
 
+**Easiest way: let the helper capture it.** Run this on your own computer (it needs the browser extras from Setup):
+
+```bash
+python -m otc_scanner.get_ssid                 # demo account; saves to ~/.otc_scanner/po_ssid
+export PO_SSID="$(cat ~/.otc_scanner/po_ssid)"
+```
+
+A Chromium window opens on the Pocket Option terminal. Log in as usual; the window closes once the page's auth message has been captured. The file is saved readable only by you, and the output names only the account type and uid, never the session value. Use `--account real` for a real account (not recommended), or `--gh-secret` to upload it straight to GitHub (next section).
+
+**Manual way (DevTools):**
+
 1. Log in at pocketoption.com in Chrome/Edge/Firefox and open the terminal. Switch to the **demo** account if you're using demo.
 2. Open DevTools (F12) → **Network** tab → filter **WS** → reload the page.
 3. Click the `socket.io` connection to a `*.po.market` host → **Messages** tab.
@@ -125,8 +136,13 @@ python -m otc_scanner -v                                      # debug logging (u
 
 ### One-time setup
 
-1. Copy your auth frame as in [section 4](#option-b-direct-websocket-feedtype-websocket). A **demo** session is strongly recommended.
-2. In the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**. Name it `PO_SSID` and paste the whole `42["auth",…]` frame as the value.
+1. Capture your auth frame and store it as the `PO_SSID` secret. A **demo** session is strongly recommended. Either:
+   - **one command** (needs the [GitHub CLI](https://cli.github.com/) logged in with `gh auth login`, run inside your clone of the repo):
+     ```bash
+     python -m otc_scanner.get_ssid --gh-secret
+     ```
+   - **or by hand:** get the frame as in [section 4](#option-b-direct-websocket-feedtype-websocket). Then in the GitHub repo go to **Settings → Secrets and variables → Actions → New repository secret**, name it `PO_SSID`, and paste the whole `42["auth",…]` frame as the value.
+2. When the session expires (the scan run turns red with `NotAuthorized`), run the same command again.
 3. The workflow file has to be on the repo's **default branch** before the "Run workflow" button appears.
 4. **If the repo is a fork**, GitHub disables Actions on it by default. Open the **Actions** tab and click *"I understand my workflows, go ahead and enable them"*. Scheduled workflows on forks also stay off until enabled there.
 
